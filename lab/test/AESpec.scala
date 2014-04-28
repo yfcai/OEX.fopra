@@ -6,6 +6,7 @@ class AESpec extends FlatSpec with AE {
 
   implicit class ParseString(code: String) {
     def -> (tree: AE): Unit = assert(AE(code) == tree)
+    def --> (unparsed: String): Unit = assert(AE(code).unparse == unparsed)
   }
 
   implicit def intToNum(n: Int): Num = Num(n)
@@ -26,6 +27,14 @@ class AESpec extends FlatSpec with AE {
     shouldFail("+ 3 5")
     shouldFail("((3)))")
     shouldFail("((x)")
+  }
+
+  it should "pretty-print well-formed expressions" in {
+    "(((51234)))" --> "51234"
+    "(3 * (5))" --> "3 * 5"
+    "(1 * 2) + (3 * 4)" --> "1 * 2 + 3 * 4"
+    "((1 * ((2) + (3))) * 4)" --> "1 * (2 + 3) * 4"
+    "(1 * (2 * (3 * (4))))" --> "1 * (2 * (3 * 4))"
   }
 
   // AE isn't ambiguous, can't test for ambiguity yet.

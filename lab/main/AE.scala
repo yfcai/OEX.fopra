@@ -1,5 +1,12 @@
 trait AE {
-  sealed trait AE
+  sealed trait AE {
+    final def unparse: String = {
+      object Unparse extends TreeConversions
+      import Unparse._
+      (this: Concrete).unparse
+    }
+  }
+
   case class Num(n: Int) extends AE
   case class Var(x: Symbol) extends AE
   case class Add(lhs: AE, rhs: AE) extends AE
@@ -20,13 +27,14 @@ trait AE {
   }
 
   // LA: Left-Associative
-  sealed trait Concrete
+  trait Unparse { def unparse: String }
+  sealed trait Concrete extends Unparse
   sealed trait Summand extends Concrete
   sealed trait Multiplicand extends Concrete
-  sealed trait MultiplicandStar
-  sealed trait MultiplicandPlus extends MultiplicandStar
-  sealed trait SummandStar
-  sealed trait SummandPlus extends SummandStar
+  sealed trait MultiplicandStar extends Unparse
+  sealed trait MultiplicandPlus extends MultiplicandStar with Unparse
+  sealed trait SummandStar extends Unparse
+  sealed trait SummandPlus extends SummandStar with Unparse
 
   object Concrete extends DelegateM[Concrete] {
     def delegate = NumC <|> VarC <|> ParenC <|> MulC <|> AddC
@@ -71,15 +79,21 @@ trait AE {
         acc(Nil)
   }
 
-  case class NumC(n: String) extends Concrete with Summand with Multiplicand
+  case class NumC(n: String) extends Concrete with Summand with Multiplicand {
+    def unparse = n.toString
+  }
 
   object NumC extends RegexM[NumC]("number", "[0-9]+")
 
-  case class VarC(x: String) extends Concrete with Summand with Multiplicand
+  case class VarC(x: String) extends Concrete with Summand with Multiplicand {
+    def unparse = x
+  }
 
   object VarC extends RegexM[VarC]("identifier", "[a-zA-Z][a-zA-Z0-9_]*")
 
-  case class ParenC(get: Concrete) extends Concrete with Summand with Multiplicand
+  case class ParenC(get: Concrete) extends Concrete with Summand with Multiplicand {
+    def unparse = s"(${get.unparse})"
+  }
 
   object ParenC extends DelegateM[ParenC] {
     sealed trait LP
@@ -89,7 +103,9 @@ trait AE {
     def delegate = LP ~> Concrete <~ RP map ParenC.apply
   }
 
-  case class MulC(first: Multiplicand, rest: MultiplicandPlus) extends Concrete with Summand
+  case class MulC(first: Multiplicand, rest: MultiplicandPlus) extends Concrete with Summand {
+    def unparse = first.unparse + rest.unparse
+  }
 
   object MulC extends BinOpM[Multiplicand, MultiplicandPlus, MulC](Multiplicand, MultiplicandPlus)
 
@@ -97,18 +113,24 @@ trait AE {
     def delegate = NumC <|> VarC <|> ParenC
   }
 
-  sealed trait Asterisk
+  sealed trait Asterisk extends Unparse
 
-  case object Asterisk extends LiteralM[Asterisk]("*") with Asterisk
+  case object Asterisk extends LiteralM[Asterisk]("*") with Asterisk {
+    def unparse = "*"
+  }
 
-  case object ZeroMultiplicand extends MultiplicandStar with EmptyM[MultiplicandStar]
+  case object ZeroMultiplicand extends MultiplicandStar with EmptyM[MultiplicandStar] {
+    def unparse = ""
+  }
 
   object MultiplicandStar extends DelegateM[MultiplicandStar] {
     def delegate = ZeroMultiplicand <|> MoreMultiplicand
   }
 
   case class MoreMultiplicand(asterisk: Asterisk, multiplicand: Multiplicand, others: MultiplicandStar)
-      extends MultiplicandStar with MultiplicandPlus
+      extends MultiplicandStar with MultiplicandPlus {
+    def unparse = s" ${asterisk.unparse} ${multiplicand.unparse}${others.unparse}"
+  }
 
   object MoreMultiplicand extends ParserM[MoreMultiplicand] {
     def run = (for {
@@ -122,7 +144,9 @@ trait AE {
     def delegate = MoreMultiplicand
   }
 
-  case class AddC(first: Summand, rest: SummandPlus) extends Concrete
+  case class AddC(first: Summand, rest: SummandPlus) extends Concrete {
+    def unparse = first.unparse + rest.unparse
+  }
 
   object AddC extends BinOpM[Summand, SummandPlus, AddC](Summand, SummandPlus)
 
@@ -130,18 +154,24 @@ trait AE {
     def delegate = NumC <|> VarC <|> ParenC <|> MulC
   }
 
-  sealed trait Plus
+  sealed trait Plus extends Unparse
 
-  case object Plus extends LiteralM[Plus]("+") with Plus
+  case object Plus extends LiteralM[Plus]("+") with Plus {
+    def unparse = "+"
+  }
 
   object SummandStar extends DelegateM[SummandStar] {
     def delegate = ZeroSummand <|> MoreSummand
   }
 
-  case object ZeroSummand extends SummandStar with EmptyM[SummandStar]
+  case object ZeroSummand extends SummandStar with EmptyM[SummandStar] {
+    def unparse = ""
+  }
 
   case class MoreSummand(plus: Plus, summand: Summand, others: SummandStar)
-      extends SummandStar with SummandPlus
+      extends SummandStar with SummandPlus {
+    def unparse = s" ${plus.unparse} ${summand.unparse}${others.unparse}"
+  }
 
   object MoreSummand extends ParserM[MoreSummand] {
     def run = (for {
@@ -312,6 +342,40 @@ trait AE {
           case MoreSummand(Plus, summand, others) => loop(Add(lhs, summand), others)
         }
         loop(fst, rest)
+    }
+
+    implicit def fromSymbol(s: Symbol): String = s.name
+    implicit def fromInt(n: Int): String = n.toString
+
+    implicit def ae2concrete(ae: AE): Concrete = ae match {
+      case Num(n) => NumC(n)
+      case Var(x) => VarC(x)
+      case add: Add => flattenAdd(add)
+      case mul: Mul => flattenMul(mul)
+    }
+
+    def flattenAdd(add: Add): AddC = {
+      def toSummand(ae: AE): Summand = (ae: Concrete) match {
+        case s: Summand => s
+        case otherwise => ParenC(otherwise)
+      }
+      def loop(root: AE, acc: SummandPlus): AddC = root match {
+        case Add(lhs, rhs) => loop(lhs, MoreSummand(Plus, toSummand(rhs), acc))
+        case otherwise => AddC(toSummand(otherwise), acc)
+      }
+      loop(add.lhs, MoreSummand(Plus, toSummand(add.rhs), ZeroSummand))
+    }
+
+    def flattenMul(add: Mul): MulC = {
+      def toMultiplicand(ae: AE): Multiplicand = (ae: Concrete) match {
+        case s: Multiplicand => s
+        case otherwise => ParenC(otherwise)
+      }
+      def loop(root: AE, acc: MultiplicandPlus): MulC = root match {
+        case Mul(lhs, rhs) => loop(lhs, MoreMultiplicand(Asterisk, toMultiplicand(rhs), acc))
+        case otherwise => MulC(toMultiplicand(otherwise), acc)
+      }
+      loop(add.lhs, MoreMultiplicand(Asterisk, toMultiplicand(add.rhs), ZeroMultiplicand))
     }
   }
 }
