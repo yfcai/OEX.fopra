@@ -16,7 +16,6 @@ class AESpec extends FlatSpec with AE {
     "x12_xx3" -> Var('x12_xx3)
     "3 * 5" -> Mul(3, 5)
     "x + y" -> Add('x, 'y)
-    println(tokenize("(1 * 2) + (3 * 4)"))
     "(1 * 2) + (3 * (((4))))" -> Add(Mul(1, 2), Mul(3, 4))
     "1 * (2 + 3) * 4" -> Mul(Mul(1, Add(2, 3)), 4)
     "1 * 2 + 3 * 4" -> Add(Mul(1, 2), Mul(3, 4))
